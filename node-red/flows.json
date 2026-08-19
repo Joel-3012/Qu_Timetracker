@@ -1,0 +1,874 @@
+[
+    {
+        "id": "5bdfd708dfdb7e64",
+        "type": "tab",
+        "label": "Timetracker",
+        "disabled": false,
+        "info": "",
+        "env": [
+            {
+                "name": "API_Token",
+                "type": "cred"
+            }
+        ]
+    },
+    {
+        "id": "inject_userid",
+        "type": "inject",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Hole User Info",
+        "props": [],
+        "repeat": "",
+        "crontab": "",
+        "once": false,
+        "onceDelay": 0.5,
+        "x": 150,
+        "y": 480,
+        "wires": [
+            [
+                "get_user_me"
+            ]
+        ]
+    },
+    {
+        "id": "get_user_me",
+        "type": "http request",
+        "z": "5bdfd708dfdb7e64",
+        "name": "GET /users/me",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://app.hakuna.ch/api/v1/users/me",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "X-Auth-Token",
+                "valueType": "other",
+                "valueValue": "$(API_Token)"
+            }
+        ],
+        "x": 320,
+        "y": 480,
+        "wires": [
+            [
+                "debug_userid"
+            ]
+        ]
+    },
+    {
+        "id": "debug_userid",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "User-ID anzeigen",
+        "active": true,
+        "console": "false",
+        "complete": "payload",
+        "x": 510,
+        "y": 480,
+        "wires": []
+    },
+    {
+        "id": "zeitrapport_in",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Empfange Companion",
+        "url": "/zeitrapport",
+        "method": "post",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 120,
+        "wires": [
+            [
+                "7c5f62c3354415df",
+                "9935dd184bc3d597"
+            ]
+        ]
+    },
+    {
+        "id": "save_input_data",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Eingabe sichern",
+        "func": "msg.originalData = msg.payload;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 560,
+        "y": 120,
+        "wires": [
+            [
+                "3ae81b912873ae5a"
+            ]
+        ]
+    },
+    {
+        "id": "load_last_entries",
+        "type": "http request",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Letzter Zeiteintrag abrufen",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "query",
+        "url": "https://app.hakuna.ch/api/v1/time_entries",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "X-Auth-Token",
+                "valueType": "other",
+                "valueValue": "$(API_Token)"
+            },
+            {
+                "keyType": "other",
+                "keyValue": "Accept",
+                "valueType": "other",
+                "valueValue": "application/json"
+            }
+        ],
+        "x": 480,
+        "y": 200,
+        "wires": [
+            [
+                "prepare_new_entry"
+            ]
+        ]
+    },
+    {
+        "id": "prepare_new_entry",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Zeitblock & Mapping",
+        "func": "// Zeitblock & Mapping (final)\n\n// Maps laden\nconst projektMap = global.get(\"projektMap\") || {};\nconst activityMap = global.get(\"activityMap\") || {};\n\n// Companion-Body sicher holen (aus \"Eingabe sichern\")\nconst body = (msg.originalData && typeof msg.originalData === 'object')\n    ? msg.originalData\n    : (msg.req?.body || {});\n\n// Minuten parsen (Time|time|minutes)\nconst timeRaw = body.Time ?? body.time ?? body.minutes;\nconst dauerMin = Number.parseInt(String(timeRaw || '').trim(), 10);\nif (!Number.isFinite(dauerMin) || dauerMin <= 0) {\n    msg.statusCode = 400;\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"⚠️ Fehler: Time (Minuten) ist ungültig.\";\n    return msg;\n}\n\n// Einträge (heute) aus vorherigem HTTP-Request\nconst entries = Array.isArray(msg.payload) ? msg.payload : [];\n\n// letzte Endzeit bestimmen (Fallback heute 07:00 lokale Zeit)\nconst now = new Date();\nconst fallbackStart = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 7, 0, 0);\nlet letzteEndzeit = fallbackStart;\n\nfor (const e of entries) {\n    if (e && e.date && e.end_time) {\n        const [Y, M, D] = String(e.date).split('-').map(Number);\n        const [h, m] = String(e.end_time).split(':').map(Number);\n        const dt = new Date(Y, M - 1, D, h, m || 0, 0, 0); // lokale Zeit\n        if (!isNaN(dt.getTime()) && dt > letzteEndzeit) letzteEndzeit = dt;\n    }\n}\n\n// neuen Block berechnen\nconst start = new Date(letzteEndzeit);\nconst end = new Date(start.getTime() + dauerMin * 60000);\nif (isNaN(start.getTime()) || isNaN(end.getTime())) {\n    msg.statusCode = 400;\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"⚠️ Fehler: Zeitdaten konnten nicht berechnet werden.\";\n    return msg;\n}\n\n// Format yyyy-mm-dd / HH:MM\nconst pad = n => String(n).padStart(2, '0');\nconst dateStr = `${start.getFullYear()}-${pad(start.getMonth() + 1)}-${pad(start.getDate())}`;\nconst startStr = `${pad(start.getHours())}:${pad(start.getMinutes())}`;\nconst endStr = `${pad(end.getHours())}:${pad(end.getMinutes())}`;\n\n// IDs mappen\nconst projectId = projektMap[body.Project];\nconst taskId = activityMap[body.task];\nif (!projectId || !taskId) {\n    msg.statusCode = 400;\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"⚠️ Fehler: Projekt/Task nicht gemappt.\";\n    return msg;\n}\n\n// Finaler Payload für Hakuna POST\nmsg.payload = {\n    date: dateStr,\n    start_time: startStr,\n    end_time: endStr,\n    project_id: projectId,\n    task_id: taskId\n};\n\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 180,
+        "y": 280,
+        "wires": [
+            [
+                "sende_zeitrapport",
+                "8ebddcbe0161f708"
+            ]
+        ]
+    },
+    {
+        "id": "sende_zeitrapport",
+        "type": "http request",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Sende an Hakuna",
+        "method": "POST",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://app.hakuna.ch/api/v1/time_entries",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "X-Auth-Token",
+                "valueType": "other",
+                "valueValue": "$(API_Token)"
+            },
+            {
+                "keyType": "other",
+                "keyValue": "Content-Type",
+                "valueType": "other",
+                "valueValue": "application/json"
+            }
+        ],
+        "x": 450,
+        "y": 280,
+        "wires": [
+            [
+                "rueckmeldung"
+            ]
+        ]
+    },
+    {
+        "id": "rueckmeldung",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Rückmeldung erzeugen",
+        "func": "if (msg.statusCode === 200 || msg.statusCode === 201) {\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"✔️ OK\";\n} else {\n    msg.headers = { \"Content-Type\": \"text/plain; charset=utf-8\" };\n    msg.payload = \"⚠️ Fehler\";\n}\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 190,
+        "y": 360,
+        "wires": [
+            [
+                "http_response"
+            ]
+        ]
+    },
+    {
+        "id": "http_response",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Antwort an Companion",
+        "statusCode": "200",
+        "headers": {},
+        "x": 470,
+        "y": 360,
+        "wires": []
+    },
+    {
+        "id": "inject_projects",
+        "type": "inject",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Lade Projekte",
+        "props": [
+            {
+                "p": "payload"
+            }
+        ],
+        "repeat": "",
+        "crontab": "00 12 * * *",
+        "once": true,
+        "onceDelay": "0.5",
+        "topic": "",
+        "payload": "",
+        "payloadType": "str",
+        "x": 160,
+        "y": 520,
+        "wires": [
+            [
+                "http_request_projects"
+            ]
+        ]
+    },
+    {
+        "id": "http_request_projects",
+        "type": "http request",
+        "z": "5bdfd708dfdb7e64",
+        "name": "GET Projekte von Hakuna",
+        "method": "GET",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "https://app.hakuna.ch/api/v1/projects",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [
+            {
+                "keyType": "other",
+                "keyValue": "X-Auth-Token",
+                "valueType": "other",
+                "valueValue": "$(API_Token)"
+            }
+        ],
+        "x": 370,
+        "y": 520,
+        "wires": [
+            [
+                "map_and_store"
+            ]
+        ]
+    },
+    {
+        "id": "map_and_store",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Projekt- & Task-Mapping speichern",
+        "func": "let projektMap = {};\nlet activityMap = {};\n\n// Prüfen, ob Hakuna überhaupt ein Array geliefert hat\nif (!Array.isArray(msg.payload)) {\n    node.error(\"❌ Hakuna hat keine Projektliste geliefert.\");\n    node.warn(msg.payload);\n    return null;\n}\n\nlet aktiveProjekte = 0;\nlet aktiveTasks = 0;\n\nfor (const projekt of msg.payload) {\n\n    // Nur aktive Projekte\n    if (projekt.archived === true) {\n        continue;\n    }\n\n    aktiveProjekte++;\n\n    // Projekt speichern\n    if (projekt.name && projekt.id) {\n        projektMap[projekt.name] = projekt.id;\n    }\n\n    // Tasks des Projekts durchgehen\n    for (const task of (projekt.tasks || [])) {\n\n        // Archivierte Tasks ebenfalls überspringen\n        if (task.archived === true) {\n            continue;\n        }\n\n        if (!task.name || !task.id) {\n            continue;\n        }\n\n        // Gleichen Tasknamen nur einmal speichern\n        if (!activityMap[task.name]) {\n            activityMap[task.name] = task.id;\n            aktiveTasks++;\n        }\n    }\n}\n\n// Global speichern\nglobal.set(\"projektMap\", projektMap);\nglobal.set(\"activityMap\", activityMap);\n\n// Debug-Ausgabe\nnode.warn(\"================================\");\nnode.warn(\"✅ Hakuna Mapping aktualisiert\");\nnode.warn(\"📁 Aktive Projekte: \" + aktiveProjekte);\nnode.warn(\"🔧 Eindeutige aktive Tasks: \" + aktiveTasks);\nnode.warn(\"📋 Tasks:\");\nnode.warn(\n    Object.keys(activityMap)\n        .sort((a, b) => a.localeCompare(b, \"de\"))\n);\nnode.warn(\"================================\");\n\n// Für normalen Debug-Node\nmsg.projektMap = projektMap;\nmsg.activityMap = activityMap;\n\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 640,
+        "y": 520,
+        "wires": [
+            [
+                "debug_out"
+            ]
+        ]
+    },
+    {
+        "id": "debug_out",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Mapping gespeichert",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "complete": "true",
+        "x": 900,
+        "y": 520,
+        "wires": []
+    },
+    {
+        "id": "http_in_tasks",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "API: Tasks",
+        "url": "/tasks",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 120,
+        "y": 640,
+        "wires": [
+            [
+                "fn_tasks"
+            ]
+        ]
+    },
+    {
+        "id": "fn_tasks",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Lade Task-Namen",
+        "func": "let activityMap = global.get(\"activityMap\") || {};\nmsg.payload = Object.keys(activityMap);\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 640,
+        "wires": [
+            [
+                "http_response_tasks",
+                "debug_tasks"
+            ]
+        ]
+    },
+    {
+        "id": "http_response_tasks",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Tasks Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 580,
+        "y": 640,
+        "wires": []
+    },
+    {
+        "id": "debug_tasks",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Debug Tasks",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 580,
+        "y": 680,
+        "wires": []
+    },
+    {
+        "id": "http_in_projects",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "API: /projects-list",
+        "url": "/projects-list",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 140,
+        "y": 740,
+        "wires": [
+            [
+                "fn_projects"
+            ]
+        ]
+    },
+    {
+        "id": "fn_projects",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Projekte Dummy",
+        "func": "let projektMap = global.get(\"projektMap\") || {};\nmsg.payload = Object.keys(projektMap); // gibt die Projektnamen als Array zurück\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 340,
+        "y": 740,
+        "wires": [
+            [
+                "http_response_projects",
+                "debug_projects"
+            ]
+        ]
+    },
+    {
+        "id": "http_response_projects",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "HTTP Response",
+        "statusCode": "",
+        "headers": {},
+        "x": 580,
+        "y": 740,
+        "wires": []
+    },
+    {
+        "id": "debug_projects",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Debug /projects",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 580,
+        "y": 800,
+        "wires": []
+    },
+    {
+        "id": "3ae81b912873ae5a",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Zeitraum heute bauen",
+        "func": "const d = new Date();\nconst yyyy = d.getFullYear();\nconst mm = String(d.getMonth() + 1).padStart(2, '0');\nconst dd = String(d.getDate()).padStart(2, '0');\nconst today = `${yyyy}-${mm}-${dd}`;\n\n// Für HTTP Request (GET): payload als Querystring nutzen\nmsg.payload = { start_date: today, end_date: today };\nreturn msg;\n",
+        "outputs": 1,
+        "timeout": 0,
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 180,
+        "y": 200,
+        "wires": [
+            [
+                "load_last_entries"
+            ]
+        ]
+    },
+    {
+        "id": "7c5f62c3354415df",
+        "type": "json",
+        "z": "5bdfd708dfdb7e64",
+        "name": "",
+        "property": "payload",
+        "action": "",
+        "pretty": false,
+        "x": 390,
+        "y": 120,
+        "wires": [
+            [
+                "save_input_data"
+            ]
+        ]
+    },
+    {
+        "id": "http_in_comp_proj_btn",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "GET /companion/button/projects/:index",
+        "url": "/companion/button/projects/:index",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 900,
+        "wires": [
+            [
+                "fn_comp_proj_btn"
+            ]
+        ]
+    },
+    {
+        "id": "fn_comp_proj_btn",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Button-Label: Projekt N",
+        "func": "// N-tes aktives Projekt (alphabetisch) liefern\nconst idx = parseInt(msg.req.params.index, 10);\nconst map = global.get(\"projektMap\") || {};\nconst names = Object.keys(map).sort((a,b)=>a.localeCompare(b,'de')); // alphabetisch\nconst name = (!isNaN(idx) && idx>=1 && idx<=names.length) ? names[idx-1] : \"\";\nmsg.headers = {\"Content-Type\":\"text/plain; charset=utf-8\"};\nmsg.payload = name;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 490,
+        "y": 900,
+        "wires": [
+            [
+                "http_res_comp_proj_btn"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_comp_proj_btn",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "200 text/plain",
+        "statusCode": "",
+        "headers": {},
+        "x": 740,
+        "y": 900,
+        "wires": []
+    },
+    {
+        "id": "http_in_comp_task_btn",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "GET /companion/button/tasks/:index",
+        "url": "/companion/button/tasks/:index",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 210,
+        "y": 960,
+        "wires": [
+            [
+                "fn_comp_task_btn"
+            ]
+        ]
+    },
+    {
+        "id": "fn_comp_task_btn",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Button-Label: Task N",
+        "func": "// N-te Tätigkeit (unique, alphabetisch)\nconst idx = parseInt(msg.req.params.index, 10);\nconst map = global.get(\"activityMap\") || {};\nconst names = Object.keys(map).sort((a,b)=>a.localeCompare(b,'de'));\nconst name = (!isNaN(idx) && idx>=1 && idx<=names.length) ? names[idx-1] : \"\";\nmsg.headers = {\"Content-Type\":\"text/plain; charset=utf-8\"};\nmsg.payload = name;\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "x": 480,
+        "y": 960,
+        "wires": [
+            [
+                "http_res_comp_task_btn"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_comp_task_btn",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "200 text/plain",
+        "statusCode": "",
+        "headers": {},
+        "x": 740,
+        "y": 960,
+        "wires": []
+    },
+    {
+        "id": "http_in_select_project",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "POST /companion/select-project",
+        "url": "/companion/select-project",
+        "method": "post",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 190,
+        "y": 1020,
+        "wires": [
+            [
+                "fn_select_project"
+            ]
+        ]
+    },
+    {
+        "id": "fn_select_project",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Auswahl: Projekt speichern",
+        "func": "// Erlaubt { index } oder { name }\nconst body = msg.req?.body || msg.payload || {};\nconst map = global.get(\"projektMap\") || {};\nconst names = Object.keys(map).sort((a,b)=>a.localeCompare(b,'de'));\nlet name = body.name;\nif (!name && body.index) {\n  const i = parseInt(body.index, 10);\n  if (!isNaN(i) && i>=1 && i<=names.length) name = names[i-1];\n}\nif (!name || !map[name]) {\n  msg.statusCode = 400;\n  msg.payload = { ok:false, error:\"Projekt nicht gefunden\" };\n  return msg;\n}\nflow.set(\"companion_selection\", Object.assign({}, flow.get(\"companion_selection\")||{}, { project:name }));\nmsg.payload = { ok:true, project:name };\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "x": 500,
+        "y": 1020,
+        "wires": [
+            [
+                "http_res_select_project"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_select_project",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "200 JSON",
+        "statusCode": "",
+        "headers": {},
+        "x": 730,
+        "y": 1020,
+        "wires": []
+    },
+    {
+        "id": "http_in_select_task",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "POST /companion/select-task",
+        "url": "/companion/select-task",
+        "method": "post",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 180,
+        "y": 1080,
+        "wires": [
+            [
+                "fn_select_task"
+            ]
+        ]
+    },
+    {
+        "id": "fn_select_task",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Auswahl: Task speichern",
+        "func": "// Erlaubt { index } oder { name }\nconst body = msg.req?.body || msg.payload || {};\nconst map = global.get(\"activityMap\") || {};\nconst names = Object.keys(map).sort((a,b)=>a.localeCompare(b,'de'));\nlet name = body.name;\nif (!name && body.index) {\n  const i = parseInt(body.index, 10);\n  if (!isNaN(i) && i>=1 && i<=names.length) name = names[i-1];\n}\nif (!name || !map[name]) {\n  msg.statusCode = 400;\n  msg.payload = { ok:false, error:\"Task nicht gefunden\" };\n  return msg;\n}\nflow.set(\"companion_selection\", Object.assign({}, flow.get(\"companion_selection\")||{}, { task:name }));\nmsg.payload = { ok:true, task:name };\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "x": 490,
+        "y": 1080,
+        "wires": [
+            [
+                "http_res_select_task"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_select_task",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "200 JSON",
+        "statusCode": "",
+        "headers": {},
+        "x": 730,
+        "y": 1080,
+        "wires": []
+    },
+    {
+        "id": "http_in_get_selection",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "GET /companion/selection",
+        "url": "/companion/selection",
+        "method": "get",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 170,
+        "y": 1140,
+        "wires": [
+            [
+                "fn_get_selection"
+            ]
+        ]
+    },
+    {
+        "id": "fn_get_selection",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Aktuelle Auswahl liefern",
+        "func": "const sel = flow.get(\"companion_selection\") || {};\nmsg.payload = { project: sel.project || null, task: sel.task || null };\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "x": 490,
+        "y": 1140,
+        "wires": [
+            [
+                "http_res_get_selection"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_get_selection",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "200 JSON",
+        "statusCode": "",
+        "headers": {},
+        "x": 730,
+        "y": 1140,
+        "wires": []
+    },
+    {
+        "id": "http_in_commit",
+        "type": "http in",
+        "z": "5bdfd708dfdb7e64",
+        "name": "POST /companion/commit",
+        "url": "/companion/commit",
+        "method": "post",
+        "upload": false,
+        "skipBodyParsing": false,
+        "swaggerDoc": "",
+        "x": 170,
+        "y": 1200,
+        "wires": [
+            [
+                "fn_commit_build",
+                "debug_commit_in"
+            ]
+        ]
+    },
+    {
+        "id": "fn_commit_build",
+        "type": "function",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Commit: JSON für /zeitrapport",
+        "func": "const sel = flow.get(\"companion_selection\") || {};\nconst body = msg.req?.body || msg.payload || {};\nconst minutes = parseInt(body.minutes || body.Time, 10);\nif (!sel.project || !sel.task || isNaN(minutes)) {\n  msg.statusCode = 400;\n  msg.payload = { ok:false, error:\"Projekt/Task/Minuten unvollständig\" };\n  return msg;\n}\n// lokalen POST auf deinen vorhandenen Flow /zeitrapport\nmsg.method = 'POST';\nmsg.url = 'http://127.0.0.1:1880/zeitrapport';\nmsg.headers = { 'Content-Type':'application/json' };\nmsg.payload = { Project: sel.project, task: sel.task, Time: String(minutes) };\nreturn msg;",
+        "outputs": 1,
+        "timeout": "",
+        "noerr": 0,
+        "initialize": "",
+        "finalize": "",
+        "libs": [],
+        "x": 510,
+        "y": 1200,
+        "wires": [
+            [
+                "http_req_local_zeitrapport"
+            ]
+        ]
+    },
+    {
+        "id": "http_req_local_zeitrapport",
+        "type": "http request",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Local POST → /zeitrapport",
+        "method": "use",
+        "ret": "obj",
+        "paytoqs": "ignore",
+        "url": "",
+        "tls": "",
+        "persist": false,
+        "proxy": "",
+        "insecureHTTPParser": false,
+        "authType": "",
+        "senderr": false,
+        "headers": [],
+        "x": 780,
+        "y": 1200,
+        "wires": [
+            [
+                "http_res_commit",
+                "debug_commit_out"
+            ]
+        ]
+    },
+    {
+        "id": "http_res_commit",
+        "type": "http response",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Antwort an Companion (Commit)",
+        "statusCode": "",
+        "headers": {},
+        "x": 1100,
+        "y": 1200,
+        "wires": []
+    },
+    {
+        "id": "debug_commit_in",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Commit IN",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 440,
+        "y": 1240,
+        "wires": []
+    },
+    {
+        "id": "debug_commit_out",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Commit OUT",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "x": 1010,
+        "y": 1240,
+        "wires": []
+    },
+    {
+        "id": "8ebddcbe0161f708",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Zeitblock & Mapping",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 820,
+        "y": 240,
+        "wires": []
+    },
+    {
+        "id": "9935dd184bc3d597",
+        "type": "debug",
+        "z": "5bdfd708dfdb7e64",
+        "name": "Empfange Companion",
+        "active": true,
+        "tosidebar": true,
+        "console": false,
+        "tostatus": false,
+        "complete": "payload",
+        "targetType": "msg",
+        "statusVal": "",
+        "statusType": "auto",
+        "x": 820,
+        "y": 80,
+        "wires": []
+    },
+    {
+        "id": "30946ca623d6655a",
+        "type": "comment",
+        "z": "5bdfd708dfdb7e64",
+        "name": "API Token Wechseln",
+        "info": "Auf den Tap doppel klicken\nAuf denm Hamburger Menue (Umgebungsvariablen)\nAPI Token setzten",
+        "x": 170,
+        "y": 60,
+        "wires": []
+    }
+]

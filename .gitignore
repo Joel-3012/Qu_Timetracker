@@ -1,0 +1,22 @@
+# Secrets / Credentials
+.env
+.env.*
+*credentials*
+*.secret
+*.key
+
+# Node-RED runtime / sensitive files
+node_modules/
+.npm/
+flows_cred.json
+flows_cred_*.json
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+
+# Temporary files
+*.tmp
+*.bak
